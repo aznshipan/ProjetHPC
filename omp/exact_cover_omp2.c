@@ -8,7 +8,9 @@
 #include <sys/time.h>
 
 #define min(a,b) (a<=b ? a:b)
-#define niveau_max 3
+#define niveau_max 2
+#define threads 8
+#define max_taches 1000
 
 /* changelog :
 2021-04-12 18:30, instance->n_primary was not properly initialized
@@ -21,6 +23,9 @@ bool print_solutions = false;          // affiche chaque solution
 long long report_delta = 1e6;          // affiche un rapport tous les ... noeuds
 long long next_report;                 // prochain rapport affiché au noeud...
 long long max_solutions = 0x7fffffffffffffff;        // stop après ... solutions
+
+long long nb_taches_total = 0;
+
 
 
 struct instance_t {
@@ -521,16 +526,14 @@ struct context_t * backtracking_setup(const struct instance_t *instance)
         return ctx;
 }
 
-
-//Fonction "backtracking_setup_reparti" ci-dessous inutile ....
-struct context_t * backtracking_setup_reparti(const struct instance_t *instance, int nb_t, int t_num)
-{
+struct context_t * context_deepcopy(const struct context_t *context, const struct instance_t *instance){
         struct context_t *ctx = malloc(sizeof(*ctx));
         if (ctx == NULL)
                 err(1, "impossible d'allouer un contexte");
-        ctx->level = 0;
-        ctx->nodes = 0;
-        ctx->solutions = 0;
+        ctx->level = context->level;
+        ctx->nodes = context->nodes;
+        ctx->solutions = context->solutions;
+
         int n = instance->n_items;
         int m = instance->n_options;
         ctx->active_options = malloc(n * sizeof(*ctx->active_options));
@@ -540,25 +543,62 @@ struct context_t * backtracking_setup_reparti(const struct instance_t *instance,
         if (ctx->active_options == NULL || ctx->chosen_options == NULL
                 || ctx->child_num == NULL || ctx->num_children == NULL)
                 err(1, "impossible d'allouer le contexte");
-        ctx->active_items = sparse_array_init(n);
-        for (int item = 0; item < instance->n_primary; item++)
-                sparse_array_add(ctx->active_items, item);
 
-        for (int item = 0; item < n; item++)
+        for(int i = 0; i < n; i++){ //copie des champs chosen_options, child_num, num_children
+        	ctx->chosen_options[i] = context->chosen_options[i];
+        	ctx->child_num[i] = context->child_num[i];
+        	ctx->num_children[i] = context->num_children[i];
+        }
+
+        ctx->active_items = sparse_array_init(n);
+        for(int i = 0; i < context->active_items->len; i++){ //copie du champs active_items
+                sparse_array_add(ctx->active_items, context->active_items->p[i]);
+
+        }
+
+        for (int item = 0; item < n; item++){
                 ctx->active_options[item] = sparse_array_init(m);
-        for (int option = (t_num*(m/nb_t)); option < min(m, ((t_num + 1)*(m/nb_t))); option++)
-                for (int k = instance->ptr[option]; k < instance->ptr[option + 1]; k++) {
-                        int item = instance->options[k];
-                        sparse_array_add(ctx->active_options[item], option);
+        }
+        for (int item = 0; item < n; item++){ //copie du champs active_options
+                if(sparse_array_empty(context->active_options[item])){
+                        continue;
+                }
+                for(int i = 0; i < context->active_options[item]->len; i++){
+                        sparse_array_add(ctx->active_options[item], context->active_options[item]->p[i]);
                 }
 
+        }
+        // à voir s'il y a plus efficace...
 
 
         return ctx;
 }
 
-void solve(const struct instance_t *instance, struct context_t *ctx)
-{
+void free_context(struct context_t *ctx, const struct instance_t *instance){
+	int n = instance->n_items;
+    int m = instance->n_options;
+    for(int i = 0; i < n; i++){
+    	free(ctx->active_options[i]->p);
+    	free(ctx->active_options[i]->q);
+    	free(ctx->active_options[i]);
+    }
+
+    free(ctx->active_items->p);
+    free(ctx->active_items->q);
+    free(ctx->active_items);
+
+    free(ctx->num_children);
+    free(ctx->child_num);
+    free(ctx->chosen_options);
+    free(ctx->active_options);
+
+    free(ctx);
+}
+
+
+
+void solve(const struct instance_t *instance, struct context_t *ctx, long long * result)
+{       long long * solution_ctx = &(ctx->solutions);
         ctx->nodes++;
         if (ctx->nodes == next_report)
                 progress_report(ctx);
@@ -573,20 +613,36 @@ void solve(const struct instance_t *instance, struct context_t *ctx)
         cover(instance, ctx, chosen_item);
         ctx->num_children[ctx->level] = active_options->len;
         for (int k = 0; k < active_options->len; k++) {
+                if(/*(ctx->level < niveau_max) && */(nb_taches_total < max_taches)){
+                	#pragma omp atomic
+                        nb_taches_total++;
 
-        	int option = active_options->p[k];
-                ctx->child_num[ctx->level] = k;
-                choose_option(instance, ctx, option, chosen_item);
-                solve(instance, ctx);
-                if (ctx->solutions >= max_solutions)
-                        return;
-                unchoose_option(instance, ctx, option, chosen_item);
+                        int option = active_options->p[k];
+                        struct context_t *ctx_copy = context_deepcopy(ctx, instance);
+                        ctx_copy->child_num[ctx_copy->level] = k;
+                        choose_option(instance, ctx_copy, option, chosen_item);
+                        #pragma omp task
+                        {
+                        solve(instance, ctx_copy, result);
+                        #pragma omp atomic
+                        *result+=ctx_copy->solutions;
+                        free_context(ctx_copy, instance);
+                        }
+                }else{
+                        int option = active_options->p[k];
+                        ctx->child_num[ctx->level] = k;
+                        choose_option(instance, ctx, option, chosen_item);
+                        solve(instance, ctx, result);
+                        if (ctx->solutions >= max_solutions)
+                                return;
+                        unchoose_option(instance, ctx, option, chosen_item);
+                }
         }
         uncover(instance, ctx, chosen_item);                      /* backtrack */
 
 }
 
-void solve_reparti(const struct instance_t *instance, struct context_t *ctx, int num_threads, int thread_num, int appel)
+void solve_reparti(const struct instance_t *instance, struct context_t *ctx, int num_threads, int thread_num, long long * result)
 {
         ctx->nodes++;
         if (ctx->nodes == next_report)
@@ -601,28 +657,16 @@ void solve_reparti(const struct instance_t *instance, struct context_t *ctx, int
                 return;           /* échec : impossible de couvrir chosen_item */
         cover(instance, ctx, chosen_item);
         ctx->num_children[ctx->level] = active_options->len;
-        if(appel == 0){
-                for (int k = thread_num; k < active_options->len; k+=num_threads) {
-                        int option = active_options->p[k];
-                        ctx->child_num[ctx->level] = k;
-                        choose_option(instance, ctx, option, chosen_item);
-                        solve_reparti(instance, ctx, num_threads, thread_num, 1);
-                        if (ctx->solutions >= max_solutions)
-                                return;
-                        unchoose_option(instance, ctx, option, chosen_item);
-                }
-        }else{
-                for (int k = 0; k < active_options->len; k++) {
-
-                        int option = active_options->p[k];
-                        ctx->child_num[ctx->level] = k;
-                        choose_option(instance, ctx, option, chosen_item);
-                        solve_reparti(instance, ctx, num_threads, thread_num, 1);
-                        if (ctx->solutions >= max_solutions)
-                                return;
-                        unchoose_option(instance, ctx, option, chosen_item);
-                }
+        for (int k = thread_num; k < active_options->len; k+=num_threads) {
+                int option = active_options->p[k];
+                ctx->child_num[ctx->level] = k;
+                choose_option(instance, ctx, option, chosen_item);
+                solve(instance, ctx, result);
+                if (ctx->solutions >= max_solutions)
+                        return;
+                unchoose_option(instance, ctx, option, chosen_item);
         }
+       
         uncover(instance, ctx, chosen_item);                      /* backtrack */
 
 }
@@ -631,13 +675,14 @@ void solve_para(const struct instance_t *instance, struct context_t ** ctx_table
 
         for(int i = 0; i < nb_t; i++){
                 #pragma omp task
-                solve_reparti(instance, ctx_tableau[i], nb_t, i, 0);
+                solve_reparti(instance, ctx_tableau[i], nb_t, i, nb_solution);
         }
         #pragma omp taskwait
 
-        *nb_solution = 0;
+        //*nb_solution = 0;
         for(int i = 0; i < nb_t; i++){
-                *nb_solution = *nb_solution + ctx_tableau[i]->solutions;
+                #pragma omp atomic
+                *nb_solution += ctx_tableau[i]->solutions;
         }
 }
 
@@ -680,11 +725,16 @@ int main(int argc, char **argv)
         struct context_t * ctx = backtracking_setup(instance);
         struct context_t ** ctx_tab = (struct context_t **)malloc(nb_thread*sizeof(struct context_t *));
 
+
+        
+
         for(int i = 0; i < nb_thread; i++){
                 ctx_tab[i] = backtracking_setup(instance);
         }
 
-        long long solutions_total; //nombre de solution trouvé (la somme de tous les ctx->solutions)
+
+        long long solutions_total = 0; //nombre de solution trouvé (la somme de tous les ctx->solutions)
+
         
         start = wtime();
 
@@ -698,6 +748,9 @@ int main(int argc, char **argv)
         //                wtime() - start);
         printf("FINI. Trouvé %lld solutions en %.1fs\n", solutions_total, 
                         wtime() - start);
+
+        printf("Nombre total de taches : %lld\n", nb_taches_total);
+
         exit(EXIT_SUCCESS);
 }
 

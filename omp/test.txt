@@ -1,0 +1,7 @@
+
+ ./exact_cover --in  ../Instances-20210423/bell12.ec
+FINI. Trouvé 4213597 solutions en 0.7s
+ ./exact_cover --in  ../Instances-20210423/bell13.ec
+FINI. Trouvé 27644437 solutions en 4.9s
+ ./exact_cover --in  ../Instances-20210423/bell14.ec
+FINI. Trouvé 190899322 solutions en 36.2s

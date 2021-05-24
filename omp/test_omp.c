@@ -700,6 +700,3 @@ int main(int argc, char **argv)
                         wtime() - start);
         exit(EXIT_SUCCESS);
 }
-
-
-
