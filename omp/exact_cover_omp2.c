@@ -544,28 +544,28 @@ struct context_t * context_deepcopy(const struct context_t *context, const struc
                 || ctx->child_num == NULL || ctx->num_children == NULL)
                 err(1, "impossible d'allouer le contexte");
 
-        for(int i = 0; i < n; i++){ //copie des champs chosen_options, child_num, num_children
-        	ctx->chosen_options[i] = context->chosen_options[i];
-        	ctx->child_num[i] = context->child_num[i];
-        	ctx->num_children[i] = context->num_children[i];
-        }
+
+        memcpy(ctx->chosen_options, context->chosen_options, n * sizeof(*ctx->chosen_options));
+        memcpy(ctx->child_num, context->child_num, n * sizeof(*ctx->child_num));
+        memcpy(ctx->num_children, context->num_children, n * sizeof(*ctx->num_children));
+
 
         ctx->active_items = sparse_array_init(n);
-        for(int i = 0; i < context->active_items->len; i++){ //copie du champs active_items
-                sparse_array_add(ctx->active_items, context->active_items->p[i]);
-
-        }
+        ctx->active_items->len = context->active_items->len;
+        ctx->active_items->capacity = context->active_items->capacity;
+        memcpy(ctx->active_items->p, context->active_items->p, n * sizeof(int));
+        memcpy(ctx->active_items->q, context->active_items->q, n * sizeof(int));
 
         for (int item = 0; item < n; item++){
                 ctx->active_options[item] = sparse_array_init(m);
         }
         for (int item = 0; item < n; item++){ //copie du champs active_options
-                if(sparse_array_empty(context->active_options[item])){
-                        continue;
-                }
-                for(int i = 0; i < context->active_options[item]->len; i++){
-                        sparse_array_add(ctx->active_options[item], context->active_options[item]->p[i]);
-                }
+                
+                ctx->active_options[item]->len = context->active_options[item]->len;
+                ctx->active_options[item]->capacity = context->active_options[item]->capacity;
+                memcpy(ctx->active_options[item]->p, context->active_options[item]->p, m * sizeof(int));
+                memcpy(ctx->active_options[item]->q, context->active_options[item]->q, m * sizeof(int));
+
 
         }
         // à voir s'il y a plus efficace...
