@@ -6,10 +6,11 @@
 #include <err.h>
 #include <getopt.h>
 #include <sys/time.h>
+#include <omp.h>
 
 #define min(a,b) (a<=b ? a:b)
 #define niveau_max 2
-#define threads 8
+#define threads omp_get_max_threads
 #define max_taches 1000
 
 /* changelog :
@@ -719,7 +720,7 @@ int main(int argc, char **argv)
                 usage(argv);
         next_report = report_delta;
 
-        int nb_thread = 8; //choix du nombre de threads
+        int nb_thread = omp_get_max_threads(); //choix du nombre de threads
 
         struct instance_t * instance = load_matrix(in_filename);
         struct context_t * ctx = backtracking_setup(instance);
